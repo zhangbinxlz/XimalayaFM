@@ -371,7 +371,6 @@ class XiMaMain:
         })
         #browser.switch_to_window(browser.window_handles[0])
         #time.sleep(1)
-        count = 0
         fm_count, fm_path, max_page = self.xmd.get_fm(xm_fm_id, path)
         if max_page:
             # 这里应该是 fm_count
@@ -380,9 +379,6 @@ class XiMaMain:
                 r_json = json.loads(r.text)
                 tracks = r_json['data']['tracks']
                 for i, track in enumerate(tracks):
-                    count = count + 1
-                    if count > 490:
-                        break
                     audio_id = track['trackId']
                     audio_title = str(track['title']).replace(' ', '')
                     audio_url = self.xmd.base_url + track['url']
