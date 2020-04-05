@@ -143,9 +143,7 @@ class XiMaControl(QMainWindow, Ui_XiMaDownloader):
         self.vip_fm.clicked.connect(self.vip_check_box)
         self.single_fm.clicked.connect(self.single_check_box)
         self.run_button.clicked.connect(self.run)
-        self.info = 2
         self.ximamain = XiMaMain()
-        self.vip_fm.setChecked(True)
         self.path_input_line.setText(os.getcwd())
     def closeEvent(self, event):
         result = QtWidgets.QMessageBox.question(self, "XiMaDownloader", "Do you want to exit?", QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No)
