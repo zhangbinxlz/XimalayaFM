@@ -1,22 +1,24 @@
 #!/usr/bin/python
 # -*- coding:utf-8 -*-
-# author:joel 18-6-5
+# author:zhangbinxlz 2020-04-01
 
 import sys
 import hashlib
 import json
 import math
 import os
+import re
 import random
 import time
 import requests
-from scapy.layers.inet import TCP
-from scapy.all import sniff
-from scapy_http import http
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
 from PyQt5.QtWidgets import QFileDialog, QMainWindow, QApplication
 from PyQt5 import QtCore, QtGui, QtWidgets
+from browsermobproxy import Server
+# 此处的路径即为上述可执行文件的所在的路径
+server = Server(r".\browsermobproxy\bin\browsermob-proxy.bat")
 
 
 class Ui_XiMaDownloader(object):
@@ -141,12 +143,19 @@ class XiMaControl(QMainWindow, Ui_XiMaDownloader):
         self.vip_fm.clicked.connect(self.vip_check_box)
         self.single_fm.clicked.connect(self.single_check_box)
         self.run_button.clicked.connect(self.run)
-        self.info = 0
+        self.info = 2
         self.ximamain = XiMaMain()
-
+        self.vip_fm.setChecked(True)
+        self.path_input_line.setText(os.getcwd())
+    def closeEvent(self, event):
+        result = QtWidgets.QMessageBox.question(self, "XiMaDownloader", "Do you want to exit?", QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No)
+        if(result == QtWidgets.QMessageBox.Yes):
+            event.accept()
+        else:
+            event.ignore()
     def open_folder(self):
         # 选取文件
-        foldername = QFileDialog.getExistingDirectory(self, "选择文件夹", "F:/")
+        foldername = QFileDialog.getExistingDirectory(self, "选择文件夹", os.getcwd())
         foldername = str(foldername).replace('/', '\\')
         # print(foldername)
         self.path_input_line.setText(foldername)
@@ -184,6 +193,10 @@ class XiMaControl(QMainWindow, Ui_XiMaDownloader):
 
 class XiMa:
     def __init__(self):
+        # self.server = Server(r"C:\Users\zhangbinxlz\Downloads\Compressed\XimalayaFM-master\browsermobproxy\bin\browsermob-proxy.bat")
+        # self.browser = None
+        # self.proxy = None
+
         self.base_url = 'https://www.ximalaya.com'
         # 有声书
         self.yss_api = 'https://www.ximalaya.com/youshengshu/{}/{}'
@@ -214,16 +227,16 @@ class XiMa:
         r = self.s.get(self.time_api, headers=self.header)
         r_time = r.text
         return r_time
-
     def get_sign(self):
         """
-        获取sign： md5(ximalaya-服务器时间戳)(100以内随机数)服务器时间戳(100以内随机数)现在时间戳
+            获取sign： md5(ximalaya-服务器时间戳)(100以内随机数)服务器时间戳(100以内随机数)现在时间戳
         """
         nowtime = str(round(time.time() * 1000))
         servertime = self.get_time()
         sign = str(hashlib.md5("himalaya-{}".format(servertime).encode()).hexdigest()) + "({})".format(
             str(round(random.random() * 100))) + servertime + "({})".format(str(round(random.random() * 100))) + nowtime
-        self.header["xm-sign"] = sign
+        self.header["xm-sign"] =sign
+
 
     def make_dir(self, xm_fm_id, path):
         """
@@ -252,7 +265,10 @@ class XiMa:
         fm_page_size = r_fm_json['data']['tracksInfo']['pageSize']
         print_text('书名：' + fm_title)
         # 新建有声书ID的文件夹
-        fm_path = self.make_dir(xm_fm_id, path)
+
+        fm_title = re.sub("[\\\/\:\*\?\"\<>\|]","",fm_title)
+
+        fm_path = self.make_dir(fm_title, path)
         # 取最大页数，向上取整
         max_page = math.ceil(fm_count/fm_page_size)
         return fm_count, fm_path, max_page
@@ -278,21 +294,28 @@ class XiMa:
         response = self.s.get(self.album_tracks_api.format(xm_fm_id, page_num), headers=self.header)
         return response
 
-    def save_fm2local(self, title, src, path):
+    def save_fm2local(self, src, title, m4a_path):
         """
         保存音频到本地
         :param title:
         :param src:
         :param path:
         """
-        r_audio_src = requests.get(src, headers=self.header)
-        m4a_path = path + '\\' + title + '.m4a'
-        if not os.path.exists(m4a_path):
+        try_count = 1
+        success = False
+        while(try_count < 4 and success == False):
+            try:
+                r_audio_src = requests.get(src, headers=self.header)
+                success = True
+            except:
+                print_text("获取文件失败，正在重试 %d ……"%try_count)
+                try_count = try_count + 1
+                time.sleep(3)
+        if success:
             with open(m4a_path, 'wb') as f:
                 f.write(r_audio_src.content)
-                print_text(title + '保存完毕...')
-        else:
-            print_text(title + '.m4a 已存在')
+                print_text(title+'保存完毕...')
+
 
 
 class XiMaMain:
@@ -309,13 +332,46 @@ class XiMaMain:
                 for audio in r_json['data']['tracksAudioPlay']:
                     audio_title = str(audio['trackName']).replace(' ', '')
                     audio_src = audio['src']
-                    self.xmd.save_fm2local(audio_title, audio_src, fm_path)
+                    audio_title = re.sub("[\\\/\:\*\?\"\<>\|]",'',audio_title)
+                    m4a_path = fm_path + '\\' + audio_title + '.m4a'
+                    if os.path.exists(m4a_path):
+                        continue
+                    else:
+                        self.xmd.save_fm2local(audio_src, audio_title, m4a_path)
                 # 每爬取1页，30个音频，休眠3秒
                 time.sleep(3)
         else:
             print_text('no max_page')
 
     def get_pay_fm(self, xm_fm_id, path, token):
+        server.start()
+        proxy = server.create_proxy()
+        chrome_options = Options()
+        chrome_options.add_argument('--ignore-certificate-errors')
+        chrome_options.add_argument('--proxy-server={0}'.format(proxy.proxy))
+        #chrome_options.add_argument('--headless')
+        chrome_options.add_argument('--disable-gpu')
+        chrome_options.add_argument('--mute-audio')
+        chrome_options.add_argument('-–disable-images')
+
+        prefs = {"profile.managed_default_content_settings.images": 2}
+        chrome_options.add_experimental_option("prefs", prefs)
+
+        browser = webdriver.Chrome(chrome_options=chrome_options)
+        browser.start_client()
+        #time.sleep(1)
+        #js = 'window.open("https://ximalaya.com")'
+        #browser.execute_script(js)
+        browser.get("https://ximalaya.com")
+        browser.add_cookie({
+            # 此处xxx.com前，需要带点，注意domain也是cookie必须的
+            'domain': '.ximalaya.com',
+            'name': '1&_token',
+            'value': token,
+        })
+        #browser.switch_to_window(browser.window_handles[0])
+        #time.sleep(1)
+        count = 0
         fm_count, fm_path, max_page = self.xmd.get_fm(xm_fm_id, path)
         if max_page:
             # 这里应该是 fm_count
@@ -324,49 +380,64 @@ class XiMaMain:
                 r_json = json.loads(r.text)
                 tracks = r_json['data']['tracks']
                 for i, track in enumerate(tracks):
+                    count = count + 1
+                    if count > 490:
+                        break
                     audio_id = track['trackId']
                     audio_title = str(track['title']).replace(' ', '')
                     audio_url = self.xmd.base_url + track['url']
-                    print_text(str(audio_title + '' + audio_url))
-                    real_url = self.auto_click(audio_url, token)
-                    self.xmd.save_fm2local(audio_title, real_url, fm_path)
-                    # 每爬取1页，30个音频，休眠1~3秒
-                    time.sleep(random.randint(1, 3))
+                    audio_title = re.sub("[\\\/\:\*\?\"\<>\|]",'',audio_title)
+                    m4a_path = fm_path + '\\' + audio_title + '.m4a'
+                    if os.path.exists(m4a_path):
+                        print_text(audio_title+"已下载……")
+                        continue
+                    else:
+                        print_text(str(audio_title + '开始下载……'))
+                        real_url = self.auto_click(audio_url, token,proxy,browser)
+                        #print_text(real_url)
+                        if real_url == None:
+                            continue
+                        self.xmd.save_fm2local(real_url, audio_title, m4a_path)
+                        # 每爬取1页，30个音频，休眠1~3秒
+                        time.sleep(random.randint(1, 3))
         else:
             print_text('no max_page')
-
-    def auto_click(self, url, token):
-        """
-        参数url为对应的VIP音频的播放页面，selenium访问页面后，带上cookie（1&_token）模拟登陆再次访问，前提你已经是会员
-        等待页面加载完成，通过selenium+Chromedriver的无头浏览器模拟点击音频播放按钮
-        scapy开始抓点击后音频真实地址的数据包，退出browser，解析包
-        注意click与抓包的顺序，先点击再抓包
-        """
-        chrome_options = Options()
-        chrome_options.add_argument('--headless')
-        chrome_options.add_argument('--disable-gpu')
-        browser = webdriver.Chrome(chrome_options=chrome_options)
-        browser.get(url)
-        browser.add_cookie({
-            # 此处xxx.com前，需要带点，注意domain也是cookie必须的
-            'domain': '.ximalaya.com',
-            'name': '1&_token',
-            'value': token,
-        })
-        browser.get(url)
-        time.sleep(4)
-        print_text('开始抓包')
-        # selenium 点击播放按钮
-        browser.find_element_by_css_selector(".play-btn.fR_").click()
-        # 下面的iface是电脑网卡的名称 count是捕获报文的数目
-        pkts = sniff(filter="tcp and port 80", iface="Qualcomm Atheros AR956x Wireless Network Adapter", count=5)
+        proxy.close()
+        server.stop()
         browser.quit()
-        for pkt in pkts:
-            if TCP in pkt and pkt.haslayer(http.HTTPRequest):
-                http_header = pkt[http.HTTPRequest].fields
-                req_url = 'http://' + bytes.decode(http_header['Host']) + bytes.decode(http_header['Path'])
-                return req_url
 
+    def auto_click(self, url, token,proxy,browser):
+        real_url = None
+        try_count = 1
+        success = False
+        while(try_count < 6 and success == False):
+            try:
+                proxy.new_har()
+                browser.get(url)
+                time.sleep(2)
+                #proxy.wait_for_traffic_to_stop(quiet_period = 5000,timeout=5000)
+                #print_text('开始抓包')
+                #.play-btn.fR_  
+                browser.find_element_by_css_selector(".play-btn.fR_").click()
+                time.sleep(5)
+                
+                result = proxy.har
+                for i in range(len(result['log']['entries'])):
+                    try:
+                        url =  result['log']['entries'][i]['request']['url']
+                        #print_text(url)
+                        if url[0:16] == 'https://audiopay' :
+                            real_url = url
+                            success = True
+                            print_text("成功捕获到真实地址……")
+                            break
+                    except :
+                        pass
+            except:
+                print_text("获取链接失败，正在重试 %d ……"%try_count)
+                try_count = try_count + 1
+                time.sleep(random.randint(2, 6))
+        return real_url
 
 def print_text(msg):
     control.output_text.append(msg)
@@ -379,4 +450,3 @@ if __name__ == "__main__":
     control = XiMaControl()
     control.show()
     sys.exit(app.exec_())
-
